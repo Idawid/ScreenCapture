@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <gdiplus.h>
 #include <iostream>
+#include <cstddef>
 #pragma comment (lib, "Gdiplus.lib")
 
 // Global variables
@@ -18,6 +19,7 @@ TrayIcon* g_trayIcon;
 HHOOK g_hHook = NULL;
 UINT g_hotkeyId = 1;
 bool g_isWindowVisible = false;
+int bW = 1;
 
 // Hooks
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -28,7 +30,9 @@ void DrawWindowContent(HDC hdc, HBITMAP hBitmap, int width, int height);
 // Function to capture the screen content
 HBITMAP CaptureScreen(int rectX, int rectY, int rectWidth, int rectHeight);
 // Function that draws a rectangle
-void DrawOverlay(Gdiplus::Graphics& graphics, Gdiplus::SolidBrush& overlayBrush, int width, int height);
+void DrawOverlay(Gdiplus::Graphics& graphics, Gdiplus::SolidBrush& overlayBrush, int startX, int startY, int width, int height);
+// Function that draws border around a rectangle
+void DrawBorder(Gdiplus::Graphics& graphics, Gdiplus::Pen& borderPen, int startX, int startY, int endX, int endY);
 // Function that excludes a rectangle from graphics
 void ExcludeNonCoveredRegion(Gdiplus::Graphics& graphics, int startX, int startY, int endX, int endY);
 // Function that registers global hotkey
@@ -41,6 +45,17 @@ void SetLowLevelKeyboardHook();
 void UnsetLowLevelKeyboardHook();
 // Function to copy the image to the clipboard
 void CopyImageToClipboard(HWND hWnd, HBITMAP hBitmap);
+//
+std::string GetLastErrorString();
+
+struct WindowResources
+{
+    HBITMAP hBitmap;
+    HDC hMemDC;
+    HBITMAP hMemBitmap;
+    int wWidth;
+    int wHeight;
+};
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow)
 {
@@ -51,12 +66,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     // Create the window class
     const wchar_t CLASS_NAME[] = L"ScreenCopyWindowClass";
 
-    WNDCLASS wc = { 0 };
-    wc.lpfnWndProc = WndProc;
-    wc.hInstance = hInstance;
-    wc.lpszClassName = CLASS_NAME;
+    WNDCLASSEX wcex = { 0 };
+    wcex.lpfnWndProc = WndProc;
+    wcex.hInstance = hInstance;
+    wcex.lpszClassName = CLASS_NAME;
+    wcex.cbSize = sizeof(WNDCLASSEX);
+    // We will Set and Get pointers in this order
+    wcex.cbWndExtra = sizeof(WindowResources);
 
-    RegisterClass(&wc);
+    RegisterClassEx(&wcex);
 
     // Get the screen width and height
     int screenWidth = GetSystemMetrics(SM_CXSCREEN);
@@ -117,14 +135,33 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     return static_cast<int>(msg.wParam);
 }
 
+LONG_PTR result;
+std::string errorMessage;
+
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message)
     {
     case WM_CREATE:
     {
-        HBITMAP hBitmap = CaptureScreen(0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
-        SetWindowLongPtr(hWnd, GWLP_USERDATA, (LONG_PTR)hBitmap);
+        int windowWidth = GetSystemMetrics(SM_CXSCREEN);  // width of client area
+        int windowHeight = GetSystemMetrics(SM_CYSCREEN); // height of client area
+        SetWindowLong(hWnd, offsetof(WindowResources, wWidth), windowWidth);
+        SetWindowLong(hWnd, offsetof(WindowResources, wHeight), windowHeight);
+
+        HBITMAP hBitmap = CaptureScreen(0, 0, windowWidth, windowHeight);
+        SetWindowLongPtr(hWnd, offsetof(WindowResources, hBitmap), (LONG_PTR)hBitmap);
+
+        // Create the compatible device context.
+        HDC hdc = GetDC(hWnd);
+        HDC hMemDC = CreateCompatibleDC(hdc);
+        SetWindowLongPtr(hWnd, offsetof(WindowResources, hMemDC), (LONG_PTR)hMemDC);
+
+        // Create the compatible bitmap.
+        HBITMAP hMemBitmap = CreateCompatibleBitmap(hdc, windowWidth, windowHeight);
+        SetWindowLongPtr(hWnd, offsetof(WindowResources, hMemBitmap), (LONG_PTR)hMemBitmap);
+
+        ReleaseDC(hWnd, hdc);
 
         break;
     }
@@ -134,18 +171,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hWnd, &ps);
 
-        HBITMAP hBitmap = (HBITMAP)GetWindowLongPtr(hWnd, GWLP_USERDATA);
-
-        if (hBitmap)
+        // Pointers instead of new objects 
+        HBITMAP hBitmap = (HBITMAP)GetWindowLongPtr(hWnd, offsetof(WindowResources, hBitmap));
+        HDC hMemDC = (HDC)GetWindowLongPtr(hWnd, offsetof(WindowResources, hMemDC));
+        HBITMAP hMemBitmap = (HBITMAP)GetWindowLongPtr(hWnd, offsetof(WindowResources, hMemBitmap));
+        
+        if (hBitmap && hMemDC && hMemBitmap)
         {
-            RECT clientRect;
-            GetClientRect(hWnd, &clientRect);
+            int windowWidth = GetWindowLong(hWnd, offsetof(WindowResources, wWidth));
+            int windowHeight = GetWindowLong(hWnd, offsetof(WindowResources, wHeight));
 
-            int windowWidth = clientRect.right - clientRect.left;
-            int windowHeight = clientRect.bottom - clientRect.top;
-
-            HDC hMemDC = CreateCompatibleDC(hdc);
-            HBITMAP hMemBitmap = CreateCompatibleBitmap(hdc, windowWidth, windowHeight);
             HBITMAP hOldBitmap = (HBITMAP)SelectObject(hMemDC, hMemBitmap);
 
             DrawWindowContent(hMemDC, hBitmap, windowWidth, windowHeight);
@@ -155,14 +190,20 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             {
                 ExcludeNonCoveredRegion(graphics, g_startX, g_startY, g_endX, g_endY);
             }
+
             Gdiplus::SolidBrush overlayBrush(Gdiplus::Color(128, 0, 0, 0));
-            DrawOverlay(graphics, overlayBrush, windowWidth, windowHeight);
+            DrawOverlay(graphics, overlayBrush, 0, 0, windowWidth, windowHeight);
+
+            if (g_isMouseDown)
+            {
+                Gdiplus::Pen borderPen(Gdiplus::Color(240, 255, 255, 255));
+                borderPen.SetWidth(bW);
+                DrawBorder(graphics, borderPen, g_startX, g_startY, g_endX, g_endY);
+            }
 
             BitBlt(hdc, 0, 0, windowWidth, windowHeight, hMemDC, 0, 0, SRCCOPY);
 
             SelectObject(hMemDC, hOldBitmap);
-            DeleteDC(hMemDC);
-            DeleteObject(hMemBitmap);
         }
 
         EndPaint(hWnd, &ps);
@@ -176,7 +217,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         g_endX = g_startX;
         g_endY = g_startY;
         g_isMouseDown = true;
-        InvalidateRect(hWnd, NULL, FALSE);
+        InvalidateRect(hWnd, NULL, TRUE);
         break;
     }
 
@@ -184,9 +225,22 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     {
         if (g_isMouseDown)
         {
+            // Whole screen:
+            // g_endX = LOWORD(lParam);
+            // g_endY = HIWORD(lParam);
+            // InvalidateRect(hWnd, NULL, FALSE);
+            // Or, without border:
+            // SetRect(&rect, g_startX, g_startY, g_endX, g_endY);
+            
+            // Part left behind
+            RECT rect;
+            SetRect(&rect, min(g_startX, g_endX) - 2 * bW, min(g_startY, g_endY) - 2 * bW, max(g_endX, g_startX) + 2 * bW, max(g_endY, g_startY) + 2 * bW);
+            InvalidateRect(hWnd, &rect, FALSE);
             g_endX = LOWORD(lParam);
             g_endY = HIWORD(lParam);
-            InvalidateRect(hWnd, NULL, FALSE);
+            // New part
+            SetRect(&rect, min(g_startX, g_endX) - 2 * bW, min(g_startY, g_endY) - 2 * bW, max(g_endX, g_startX) + 2 * bW, max(g_endY, g_startY) + 2 * bW);
+            InvalidateRect(hWnd, &rect, FALSE);
         }
         break;
     }
@@ -226,15 +280,43 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 MessageBox(hWnd, L"Failed to open the clipboard.", L"Error", MB_OK | MB_ICONERROR);
             }
         }
+        g_startX = 0;
+        g_startY = 0;
+        g_endX = 0;
+        g_endY = 0;
+
+        break;
+    }
+
+    case WM_SIZE:
+    {
+        // Update window width and height.
+        int windowWidth = LOWORD(lParam);  // width of client area
+        int windowHeight = HIWORD(lParam); // height of client area
+        SetWindowLong(hWnd, offsetof(WindowResources, wWidth), windowWidth);
+        SetWindowLong(hWnd, offsetof(WindowResources, wHeight), windowHeight);
+
         break;
     }
 
     case WM_DESTROY:
     {
-        // Clean up the captured bitmap handle
-        HBITMAP hBitmap = (HBITMAP)GetWindowLongPtr(hWnd, GWLP_USERDATA);
+        // Clean up the resources
+        HBITMAP hBitmap = (HBITMAP)GetWindowLongPtr(hWnd, offsetof(WindowResources, hBitmap));
         if (hBitmap)
+        {
             DeleteObject(hBitmap);
+        }
+        HDC hMemDC = (HDC)GetWindowLongPtr(hWnd, offsetof(WindowResources, hMemDC));
+        if (hMemDC)
+        {
+            DeleteDC(hMemDC);
+        }
+        HBITMAP hMemBitmap = (HBITMAP)GetWindowLongPtr(hWnd, offsetof(WindowResources, hMemBitmap));
+        if (hMemBitmap)
+        {
+            DeleteObject(hMemBitmap);
+        }
 
         PostQuitMessage(0);
         break;
@@ -299,6 +381,13 @@ LRESULT CALLBACK KeyboardHookCallback(int nCode, WPARAM wParam, LPARAM lParam)
         {
             if (!g_isWindowVisible)
             {
+                // Capture the screen
+                int windowWidth = GetWindowLong(g_hWnd, offsetof(WindowResources, wWidth));
+                int windowHeight = GetWindowLong(g_hWnd, offsetof(WindowResources, wHeight));
+                HBITMAP hBitmap = CaptureScreen(0, 0, windowWidth, windowHeight);
+                SetWindowLongPtr(g_hWnd, offsetof(WindowResources, hBitmap), (LONG_PTR)hBitmap);
+
+                // Show window
                 ShowWindow(g_hWnd, SW_SHOW);
                 g_isWindowVisible = true;
             }
@@ -309,15 +398,19 @@ LRESULT CALLBACK KeyboardHookCallback(int nCode, WPARAM wParam, LPARAM lParam)
             }
             return 1;
         }
+        else if (pKeyboardStruct->vkCode == VK_ESCAPE)
+        {
+            if (g_isWindowVisible)
+            {
+                ShowWindow(g_hWnd, SW_HIDE);
+                g_isWindowVisible = false;
+            }
+            return 1;
+        }
     }
 
     // Call the next hook in the hook chain
     return CallNextHookEx(NULL, nCode, wParam, lParam);
-}
-
-void DrawOverlay(Gdiplus::Graphics& graphics, Gdiplus::SolidBrush& overlayBrush, int width, int height)
-{
-    graphics.FillRectangle(&overlayBrush, 0, 0, width, height);
 }
 
 HBITMAP CaptureScreen(int rectX, int rectY, int rectWidth, int rectHeight)
@@ -337,15 +430,33 @@ HBITMAP CaptureScreen(int rectX, int rectY, int rectWidth, int rectHeight)
     return hBitmap;
 }
 
-void DrawWindowContent(HDC hdc, HBITMAP hBitmap, int width, int height)
+void DrawOverlay(Gdiplus::Graphics& graphics, Gdiplus::SolidBrush& overlayBrush, int startX, int startY, int width, int height)
 {
-    HDC hMemDC = CreateCompatibleDC(hdc);
-    HBITMAP hOldBitmap = (HBITMAP)SelectObject(hMemDC, hBitmap);
+    graphics.FillRectangle(&overlayBrush, 0, 0, width, height);
+}
 
-    BitBlt(hdc, 0, 0, width, height, hMemDC, 0, 0, SRCCOPY);
+void DrawBorder(Gdiplus::Graphics& graphics, Gdiplus::Pen& borderPen, int startX, int startY, int endX, int endY) {
+    int rectX = min(startX, endX) - bW / 2 - 1;
+    int rectY = min(startY, endY) - bW / 2 - 1;
+    int rectWidth = std::abs(endX - startX) + bW;
+    int rectHeight = std::abs(endY - startY) + bW;
 
-    SelectObject(hMemDC, hOldBitmap);
-    DeleteDC(hMemDC);
+    graphics.DrawRectangle(&borderPen, rectX, rectY, rectWidth, rectHeight);
+
+    //Gdiplus::Color color(255, 255, 255);
+    //Gdiplus::Rect rect(rectX, rectY, rectWidth, rectHeight);
+
+    //const int glowSize = 10;
+    //for (int i = 0; i < glowSize; ++i)
+    //{
+    //    float opacity = 1.0f - static_cast<float>(i) / glowSize;
+    //    Gdiplus::Color glowingColor(static_cast<BYTE>(255 * opacity), color.GetRed(), color.GetGreen(), color.GetBlue());
+    //    //Gdiplus::Pen pen(glowingColor, i * 2.0f + 1.0f);
+    //    Gdiplus::Pen pen(glowingColor, 1.0f);
+
+    //    graphics.DrawRectangle(&pen, rect);
+    //    rect.Inflate(-1, -1); // shrink the rectangle for the next iteration
+    //}
 }
 
 void ExcludeNonCoveredRegion(Gdiplus::Graphics& graphics, int startX, int startY, int endX, int endY)
@@ -357,6 +468,17 @@ void ExcludeNonCoveredRegion(Gdiplus::Graphics& graphics, int startX, int startY
 
     Gdiplus::Region nonCoveredRegion(Gdiplus::Rect(rectX, rectY, rectWidth, rectHeight));
     graphics.ExcludeClip(&nonCoveredRegion);
+}
+
+void DrawWindowContent(HDC hdc, HBITMAP hBitmap, int width, int height)
+{
+    HDC hMemDC = CreateCompatibleDC(hdc);
+    HBITMAP hOldBitmap = (HBITMAP)SelectObject(hMemDC, hBitmap);
+
+    BitBlt(hdc, 0, 0, width, height, hMemDC, 0, 0, SRCCOPY);
+
+    SelectObject(hMemDC, hOldBitmap);
+    DeleteDC(hMemDC);
 }
 
 void RegisterGlobalHotkey(HWND hwnd)
@@ -422,4 +544,34 @@ void CopyImageToClipboard(HWND hWnd, HBITMAP hBitmap)
     {
         MessageBox(hWnd, L"Failed to open the clipboard.", L"Error", MB_OK | MB_ICONERROR);
     }
+}
+
+std::string GetLastErrorString()
+{
+    DWORD errorCode = GetLastError();
+
+    LPWSTR messageBuffer = nullptr;
+    DWORD messageLength = FormatMessage(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER |
+        FORMAT_MESSAGE_FROM_SYSTEM |
+        FORMAT_MESSAGE_IGNORE_INSERTS,
+        NULL,
+        errorCode,
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        (LPWSTR)&messageBuffer,
+        0,
+        NULL);
+
+    if (messageLength == 0) {
+        // Failed to retrieve the error message
+        return "Unknown error occurred.";
+    }
+
+    std::wstring wideErrorMessage(messageBuffer);
+    std::string errorMessage(wideErrorMessage.begin(), wideErrorMessage.end());
+
+    // Free the buffer allocated by FormatMessage
+    LocalFree(messageBuffer);
+
+    return errorMessage;
 }
