@@ -1,5 +1,4 @@
 #pragma once
-// TrayIcon.h
 
 #include <Windows.h>
 

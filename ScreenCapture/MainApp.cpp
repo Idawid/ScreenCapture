@@ -1,4 +1,5 @@
 #include "TrayIcon.h"
+#include "OCRProcessor.h"
 #include "Resource.h"
 
 #include <windows.h>
@@ -10,6 +11,7 @@
 // Global variables
 HWND g_hWnd;
 ULONG_PTR g_gdiplusToken;
+OCRProcessor* ocr;
 int g_startX = 0;
 int g_startY = 0;
 int g_endX = 0;
@@ -96,6 +98,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     if (g_hWnd == NULL)
         return 0;
 
+    // Show unless keyboard shortcut is pressed
+    ShowWindow(g_hWnd, SW_HIDE);
+
     // Create and add the tray icon
     g_trayIcon = new TrayIcon(g_hWnd, hInstance, WM_USER + 1, LoadIcon(hInstance, MAKEINTRESOURCE(IDI_SCREENCAPTURE)));
     g_trayIcon->Add();
@@ -106,8 +111,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     // Set the global keyboard hook
     g_hHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardHookCallback, hInstance, 0);
 
-    // Hide unless keyboard shortcut is pressed
-    ShowWindow(g_hWnd, SW_HIDE);
+    // Set up the OCR Processor
+    try {
+        ocr = new OCRProcessor();
+    }
+    catch (const std::exception& e) {
+        return 0;
+    }
 
     // Message loop
     MSG msg;
@@ -117,6 +127,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
         DispatchMessage(&msg);
     }
 
+    // Clean up OCR Processor
+    delete ocr;
     // Clean up TrayIcon
     g_trayIcon->Remove();
     delete g_trayIcon;
@@ -181,6 +193,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             int windowWidth = GetWindowLong(hWnd, offsetof(WindowResources, wWidth));
             int windowHeight = GetWindowLong(hWnd, offsetof(WindowResources, wHeight));
 
+            // Double buffering
             HBITMAP hOldBitmap = (HBITMAP)SelectObject(hMemDC, hMemBitmap);
 
             DrawWindowContent(hMemDC, hBitmap, windowWidth, windowHeight);
@@ -191,7 +204,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 ExcludeNonCoveredRegion(graphics, g_startX, g_startY, g_endX, g_endY);
             }
 
-            Gdiplus::SolidBrush overlayBrush(Gdiplus::Color(128, 0, 0, 0));
+            Gdiplus::SolidBrush overlayBrush(Gdiplus::Color(156, 0, 0, 0));
             DrawOverlay(graphics, overlayBrush, 0, 0, windowWidth, windowHeight);
 
             if (g_isMouseDown)
@@ -225,20 +238,21 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     {
         if (g_isMouseDown)
         {
-            // Whole screen:
+            // Whole screen, useful for debug:
             // g_endX = LOWORD(lParam);
             // g_endY = HIWORD(lParam);
             // InvalidateRect(hWnd, NULL, FALSE);
             // Or, without border:
             // SetRect(&rect, g_startX, g_startY, g_endX, g_endY);
             
-            // Part left behind
+            // Invalidate previous selected rectangle
             RECT rect;
             SetRect(&rect, min(g_startX, g_endX) - 2 * bW, min(g_startY, g_endY) - 2 * bW, max(g_endX, g_startX) + 2 * bW, max(g_endY, g_startY) + 2 * bW);
             InvalidateRect(hWnd, &rect, FALSE);
+
+            // Invalidate new selected rectangle
             g_endX = LOWORD(lParam);
             g_endY = HIWORD(lParam);
-            // New part
             SetRect(&rect, min(g_startX, g_endX) - 2 * bW, min(g_startY, g_endY) - 2 * bW, max(g_endX, g_startX) + 2 * bW, max(g_endY, g_startY) + 2 * bW);
             InvalidateRect(hWnd, &rect, FALSE);
         }
@@ -253,14 +267,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ShowWindow(g_hWnd, SW_HIDE);
             g_isWindowVisible = false;
 
-            // Get the excluded region coordinates
+            // Get the selected region coordinates
             int rectX = min(g_startX, g_endX);
             int rectY = min(g_startY, g_endY);
             int rectWidth = abs(g_endX - g_startX);
             int rectHeight = abs(g_endY - g_startY);
 
-            // Capture the image from the excluded region
+            // Capture the image from the selected region
             HBITMAP hBitmap = CaptureScreen(rectX, rectY, rectWidth, rectHeight);
+
+            // Perform OCR on the bitmap
+            std::string ocrText = ocr->performOCR(hBitmap);
 
             // Open the clipboard
             if (OpenClipboard(hWnd))
@@ -268,8 +285,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 // Empty the clipboard
                 EmptyClipboard();
 
-                // Set the image data to the clipboard
-                SetClipboardData(CF_BITMAP, hBitmap);
+                // Set the OCR text to the clipboard
+                const char* output = ocrText.c_str();
+                size_t len = strlen(output) + 1;
+                HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, len);
+                memcpy(GlobalLock(hMem), output, len);
+                GlobalUnlock(hMem);
+                SetClipboardData(CF_TEXT, hMem);
 
                 // Close the clipboard
                 CloseClipboard();
@@ -436,8 +458,8 @@ void DrawOverlay(Gdiplus::Graphics& graphics, Gdiplus::SolidBrush& overlayBrush,
 }
 
 void DrawBorder(Gdiplus::Graphics& graphics, Gdiplus::Pen& borderPen, int startX, int startY, int endX, int endY) {
-    int rectX = min(startX, endX) - bW / 2 - 1;
-    int rectY = min(startY, endY) - bW / 2 - 1;
+    int rectX = min(startX, endX) - bW;
+    int rectY = min(startY, endY) - bW;
     int rectWidth = std::abs(endX - startX) + bW;
     int rectHeight = std::abs(endY - startY) + bW;
 
@@ -463,8 +485,8 @@ void ExcludeNonCoveredRegion(Gdiplus::Graphics& graphics, int startX, int startY
 {
     int rectX = min(startX, endX);
     int rectY = min(startY, endY);
-    int rectWidth = std::abs(endX - startX);
-    int rectHeight = std::abs(endY - startY);
+    int rectWidth = std::abs(endX - startX) - bW;
+    int rectHeight = std::abs(endY - startY) - bW;
 
     Gdiplus::Region nonCoveredRegion(Gdiplus::Rect(rectX, rectY, rectWidth, rectHeight));
     graphics.ExcludeClip(&nonCoveredRegion);

@@ -27,7 +27,7 @@
     <ClInclude Include="TrayIcon.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="OCR.h">
+    <ClInclude Include="OCRProcessor.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -36,6 +36,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="TrayIcon.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="OCRProcessor.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
