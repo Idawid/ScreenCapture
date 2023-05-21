@@ -105,6 +105,7 @@
       <PreprocessorDefinitions>_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <Optimization>Disabled</Optimization>
+      <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -134,25 +135,30 @@
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
+    <PostBuildEvent>
+      <Command>echo d | xcopy "$(SolutionDir)tessdata" "$(TargetDir)tessdata" /s /y</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClInclude Include="framework.h" />
     <ClInclude Include="OCRProcessor.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
     <ClInclude Include="TrayIcon.h" />
+    <ClInclude Include="WindowPainter.h" />
+    <ClInclude Include="WindowData.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="MainApp.cpp" />
     <ClCompile Include="OCRProcessor.cpp" />
     <ClCompile Include="TrayIcon.cpp" />
+    <ClCompile Include="WindowPainter.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="ScreenCapture.rc" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="ScreenCapture.ico" />
-    <Image Include="small.ico" />
+    <Image Include="TrayIcon.ico" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

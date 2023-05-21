@@ -5,10 +5,13 @@ OCRProcessor::OCRProcessor() {
     api = new tesseract::TessBaseAPI();
 
     // Initialize tesseract-ocr with English
-    if (api->Init(NULL, "eng")) {
+    if (api->Init(NULL, "eng", tesseract::OEM_LSTM_ONLY)) {
         // Could not initialize API
         throw std::runtime_error("Failed to initialize API.");
     }
+    api->SetVariable("tessedit_char_whitelist", "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890!@#$%^&*()-_=+[{]};:'\",<.>/?\\|`~");
+    api->SetVariable("tessedit_enable_dict_correction", "0");
+    api->SetPageSegMode(tesseract::PSM_SINGLE_BLOCK);
 }
 
 OCRProcessor::~OCRProcessor() {
@@ -16,6 +19,7 @@ OCRProcessor::~OCRProcessor() {
     api->End();
     delete api;
 }
+
 
 std::string OCRProcessor::performOCR(HBITMAP hBitmap) {
     std::string outText;
@@ -79,7 +83,7 @@ PIX* OCRProcessor::ConvertHBITMAPToPIX(HBITMAP hBitmap) {
         for (int x = 0; x < nWidth; ++x) {
             COLORREF color = *(COLORREF*)(pBits + y * ((nWidth * nBitCount + 7) / 8) + x * (nBitCount / 8));
 
-            // Fucking windows creates the DIB in BGR color format
+            // Windows uses BGR format
             uint8_t red = GetBValue(color);
             uint8_t green = GetGValue(color);
             uint8_t blue = GetRValue(color);

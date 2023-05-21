@@ -11,7 +11,7 @@ TrayIcon::TrayIcon(HWND hwnd, HINSTANCE hInstance, UINT uCallbackMessage, HICON 
     nid_.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     nid_.uCallbackMessage = uCallbackMessage_;
     nid_.hIcon = hIcon_;
-    wcscpy_s(nid_.szTip, L"My Application");
+    wcscpy_s(nid_.szTip, L"Screen Capture");
 }
 
 TrayIcon::~TrayIcon()
